@@ -1,36 +1,113 @@
 # This is a basic workflow to help you get started with Actions
 
-name: CI
-
-# Controls when the workflow will run
+name: Lede-Build
 on:
-  # Triggers the workflow on push or pull request events but only for the "master" branch
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      CPU_SELECTION:
+        description: "CPU优选,增加编译速度"
+        required: true
+        default: "默认"
+        type: choice
+        options:
+          - "默认"
+          - "8370C"
+          - "8272CL"
+          - "8171M"
+      INFORMATION_NOTICE:
+        description: "Telegram或pushplus信息通知"
+        required: true
+        default: "关闭"
+        type: choice
+        options:
+          - "关闭"
+          - "Telegram"
+          - "Pushplus"
+      SSH_ACTION:
+        description: "SSH远程配置固件"
+        required: false
+        default: false
+        type: boolean
+      UPLOAD_FIRMWARE:
+        description: "上传固件到 Github Artifacts"
+        required: false
+        default: true
+        type: boolean
+      UPLOAD_RELEASE:
+        description: "发布固件到 Github Releases"
+        required: false
+        default: false
+        type: boolean
+      CACHEWRTBUILD_SWITCH:
+        description: "缓存加速编译"
+        required: false
+        default: true
+        type: boolean
+      UPDATE_FIRMWARE_ONLINE:
+        description: "增加在线更新固件功能/自动打包Amlogic_Rockchip系列固件"
+        required: false
+        default: true
+        type: boolean
+      COMPILATION_INFORMATION:
+        description: "是否显示编译信息"
+        required: false
+        default: true
+        type: boolean
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+# 定时触发开启开始编译(把下面两个#去掉开启,时间设置请看定时开启编译说明)
+#  schedule:
+#   - cron: 35 18 * * *
+
+env:
+  GITHUB_LINK: https://github.com/${{github.repository}}
+  GIT_ACTOR: ${{github.actor}}
+  GIT_REPOSITORY: ${{github.repository}}
+  RUN_NUMBER: ${{github.run_number}}
+  RUN_WORKFLOW: ${{github.workflow}}
+  REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+  PUSH_PLUS_TOKEN: ${{ secrets.PUSH_PLUS_TOKEN }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+  TZ: Asia/Shanghai
+
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    name: 启动"${{ matrix.target }}"触发编译
+    runs-on: ubuntu-22.04
+    if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
+    env:
+      FOLDER_NAME: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [Lede]
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: 密匙检测（密匙为空则退出）
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          cd ${GITHUB_WORKSPACE}
+          if [[ -z "${{ secrets.REPO_TOKEN }}" ]]; then
+            echo "您没有设置仓库密匙，请按教程设置好密匙再来"
+            echo "REPO_TOKEN密匙制作教程：https://git.io/jm.md"
+            exit 1
+          fi
+
+      - name: 准备结束
+        uses: actions/checkout@v4
+      
+      - name: 部署编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update -y
+          sudo -E apt-get -qq install -y gawk git gettext libssl-dev xsltproc zip git-core wget curl grep python2.7 python3 python3-pip libpython3-dev
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /${{ env.DIY_WORK }}
+          sudo chown $USER:$GROUPS /${{ env.DIY_WORK }}
+          
+      - name: 下载"${{ matrix.target }}-${{ github.event.inputs.REPO_BRANCH }}"源码
+        working-directory: /${{ env.DIY_WORK }}
+        run: |
+          git clone -b "${REPO_BRANCH}" --single-branch "${REPO_URL}" openwrt
+          ln -sf /${{ env.DIY_WORK }}/openwrt ${GITHUB_WORKSPACE}/openwrt
+          cp -Rf ${GITHUB_WORKSPACE}/build ${GITHUB_WORKSPACE}/openwrt/build
+          chmod -R +x ${GITHUB_WORKSPACE}/openwrt/build
